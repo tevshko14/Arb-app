@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     env: str = "development"
     cors_allowed_origins: list[str] = ["http://localhost:3000"]
 
+    # Alerts (optional)
+    discord_webhook_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     # Sports config
     supported_sports: list[str] = [
         "baseball_mlb",
