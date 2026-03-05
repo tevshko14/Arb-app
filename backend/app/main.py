@@ -309,3 +309,166 @@ async def api_quota() -> QuotaResponse:
         requests_remaining=None,
         message="Scheduler not active",
     )
+
+
+# ──────────────── Signals (Phase 2 — The Brain) ────────────────
+
+
+class SignalResponse(BaseModel):
+    event_id: str
+    sport: str
+    home_team: str
+    away_team: str
+    bookmaker: str
+    outcome: str
+    decimal_odds: float
+    model_prob: float
+    sharp_prob: float
+    edge_pct: float
+    kelly_fraction_pct: float
+    recommended_stake: float
+    confidence: float
+
+
+class CalibrationResponse(BaseModel):
+    n_predictions: int
+    n_resolved: int
+    brier_ensemble: float | None
+    brier_sharp: float | None
+    brier_model: float | None
+    edge_over_sharp: float | None
+    calibration_bins: list[dict]
+
+
+@app.get("/signals", response_model=list[SignalResponse])
+async def get_signals(
+    sport: SportFilter | None = Query(None, description="Filter by sport"),
+    min_edge: float = Query(0.02, ge=0.0, le=0.5, description="Minimum edge (0.02 = 2%)"),
+    limit: int = Query(20, ge=1, le=100),
+) -> list[SignalResponse]:
+    """Get current +EV signals — the Daily Golden Plays.
+
+    Returns edges found where soft bookmaker odds deviate from our
+    ensemble model probability, sized by Half Kelly.
+    """
+    from app.engine.edge import EventOdds, implied_probability, remove_vig, find_edges
+    from app.engine.ensemble import score_event
+    from app.engine.kelly import recommend_bet
+
+    # Fetch upcoming events with odds
+    async with async_session() as session:
+        query = """
+            SELECT DISTINCT e.id, e.sport, e.home_team, e.away_team
+            FROM events e
+            JOIN odds_latest ol ON ol.event_id = e.id
+            WHERE e.status = 'upcoming'
+        """
+        params: dict = {"limit": limit * 5}
+        if sport:
+            query += " AND e.sport = :sport"
+            params["sport"] = sport.value
+        query += " LIMIT :limit"
+
+        result = await session.execute(text(query), params)
+        events = result.fetchall()
+
+    all_signals: list[SignalResponse] = []
+
+    for ev in events:
+        # Fetch odds for this event
+        async with async_session() as session:
+            result = await session.execute(
+                text("""
+                    SELECT ol.bookmaker_key, ol.outcome_name, ol.price
+                    FROM odds_latest ol
+                    WHERE ol.event_id = :event_id AND ol.market = 'h2h'
+                """),
+                {"event_id": ev.id},
+            )
+            odds_rows = result.fetchall()
+
+        if not odds_rows:
+            continue
+
+        # Build EventOdds structure
+        odds_dict: dict[str, dict[str, float]] = {}
+        for row in odds_rows:
+            odds_dict.setdefault(row.bookmaker_key, {})[row.outcome_name] = row.price
+
+        event_odds = EventOdds(
+            event_id=ev.id,
+            sport=ev.sport,
+            home_team=ev.home_team,
+            away_team=ev.away_team,
+            odds=odds_dict,
+        )
+
+        # Sharp-line model: use Pinnacle as "truth"
+        sharp_raw = {}
+        if "pinnacle" in odds_dict:
+            for outcome, price in odds_dict["pinnacle"].items():
+                sharp_raw[outcome] = implied_probability(price)
+        sharp_probs = remove_vig(sharp_raw) if sharp_raw else {}
+
+        if not sharp_probs:
+            continue
+
+        # For now, use sharp probs as model probs (Phase 2 MC models
+        # will feed in here once we have stat feeds)
+        ensemble = score_event(ev.id, sharp_probs, sharp_probs)
+
+        edges = find_edges(event_odds, ensemble.outcome_probs, min_edge=min_edge)
+
+        for signal in edges:
+            rec = recommend_bet(
+                event_id=signal.event_id,
+                outcome=signal.outcome,
+                bookmaker=signal.bookmaker,
+                model_prob=signal.model_prob,
+                decimal_odds=signal.decimal_odds,
+                bankroll=1000.0,  # Default; configurable via settings later
+                kelly_multiplier=0.5,
+            )
+            all_signals.append(
+                SignalResponse(
+                    event_id=signal.event_id,
+                    sport=ev.sport,
+                    home_team=ev.home_team,
+                    away_team=ev.away_team,
+                    bookmaker=signal.bookmaker,
+                    outcome=signal.outcome,
+                    decimal_odds=signal.decimal_odds,
+                    model_prob=round(signal.model_prob, 4),
+                    sharp_prob=round(signal.sharp_prob, 4),
+                    edge_pct=round(signal.edge * 100, 2),
+                    kelly_fraction_pct=round(
+                        rec.adjusted_kelly_fraction * 100 if rec else 0, 2
+                    ),
+                    recommended_stake=rec.recommended_stake if rec else 0,
+                    confidence=signal.confidence,
+                )
+            )
+
+    # Sort by edge, return top N
+    all_signals.sort(key=lambda s: s.edge_pct, reverse=True)
+    return all_signals[:limit]
+
+
+@app.get("/calibration", response_model=CalibrationResponse)
+async def get_calibration() -> CalibrationResponse:
+    """Get model calibration metrics (Brier scores).
+
+    Shows how well our model's probability estimates match actual outcomes.
+    Lower Brier score = better calibration.
+    """
+    # In production, this would read from the persistent calibration tracker.
+    # For now, return empty state until predictions accumulate.
+    return CalibrationResponse(
+        n_predictions=0,
+        n_resolved=0,
+        brier_ensemble=None,
+        brier_sharp=None,
+        brier_model=None,
+        edge_over_sharp=None,
+        calibration_bins=[],
+    )
