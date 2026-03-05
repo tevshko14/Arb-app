@@ -1,10 +1,17 @@
-"""Tests for the odds normalizer."""
+"""Tests for the odds normalizer — including edge cases and error handling."""
 
-from app.ingestion.normalizer import normalize_event, normalize_odds, extract_bookmakers
+import pytest
+
+from app.ingestion.normalizer import (
+    NormalizationError,
+    normalize_event,
+    normalize_odds,
+    extract_bookmakers,
+)
 
 
 SAMPLE_EVENT = {
-    "id": "abc123",
+    "id": "abc123def456abc123def456abc12345",
     "sport_key": "baseball_mlb",
     "sport_title": "MLB",
     "home_team": "New York Yankees",
@@ -63,7 +70,7 @@ SAMPLE_EVENT = {
 class TestNormalizeEvent:
     def test_basic_fields(self):
         result = normalize_event(SAMPLE_EVENT)
-        assert result["id"] == "abc123"
+        assert result["id"] == "abc123def456abc123def456abc12345"
         assert result["sport"] == "baseball_mlb"
         assert result["home_team"] == "New York Yankees"
         assert result["away_team"] == "Boston Red Sox"
@@ -73,13 +80,29 @@ class TestNormalizeEvent:
         result = normalize_event(SAMPLE_EVENT)
         assert result["commence_time"] == "2026-04-15T23:05:00Z"
 
+    def test_missing_sport_title_falls_back(self):
+        raw = dict(SAMPLE_EVENT)
+        del raw["sport_title"]
+        result = normalize_event(raw)
+        assert result["league"] == "baseball_mlb"
+
+    def test_missing_required_field_raises(self):
+        for field in ["id", "sport_key", "home_team", "away_team", "commence_time"]:
+            raw = dict(SAMPLE_EVENT)
+            del raw[field]
+            with pytest.raises(NormalizationError):
+                normalize_event(raw)
+
+    def test_empty_string_field_raises(self):
+        raw = dict(SAMPLE_EVENT)
+        raw["id"] = ""
+        with pytest.raises(NormalizationError):
+            normalize_event(raw)
+
 
 class TestNormalizeOdds:
     def test_snapshot_count(self):
         snapshots = normalize_odds(SAMPLE_EVENT)
-        # pinnacle: 2 h2h + 2 spreads = 4
-        # bet365: 2 h2h = 2
-        # some_random_book: not in target_bookmakers → 0
         assert len(snapshots) == 6
 
     def test_snapshot_structure(self):
@@ -103,6 +126,56 @@ class TestNormalizeOdds:
         assert len(spreads) == 2
         assert spreads[0]["point"] == -1.5
 
+    def test_empty_bookmakers_returns_empty(self):
+        raw = dict(SAMPLE_EVENT)
+        raw["bookmakers"] = []
+        assert normalize_odds(raw) == []
+
+    def test_no_bookmakers_key_returns_empty(self):
+        assert normalize_odds({"id": "test123"}) == []
+
+    def test_missing_event_id_returns_empty(self):
+        assert normalize_odds({"bookmakers": []}) == []
+
+    def test_malformed_outcome_skipped(self):
+        raw = {
+            "id": "abc123",
+            "bookmakers": [
+                {
+                    "key": "pinnacle",
+                    "title": "Pinnacle",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "Team A", "price": 1.5},
+                                {"name": None, "price": 2.0},
+                                {"name": "Team B"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        snapshots = normalize_odds(raw)
+        assert len(snapshots) == 1
+        assert snapshots[0]["outcome_name"] == "Team A"
+
+    def test_missing_market_key_skipped(self):
+        raw = {
+            "id": "abc123",
+            "bookmakers": [
+                {
+                    "key": "pinnacle",
+                    "title": "Pinnacle",
+                    "markets": [
+                        {"outcomes": [{"name": "A", "price": 1.5}]},
+                    ],
+                }
+            ],
+        }
+        assert normalize_odds(raw) == []
+
 
 class TestExtractBookmakers:
     def test_extracts_target_books_only(self):
@@ -121,3 +194,21 @@ class TestExtractBookmakers:
         bks = extract_bookmakers(SAMPLE_EVENT)
         b365 = next(b for b in bks if b["key"] == "bet365")
         assert b365["is_sharp"] is False
+
+    def test_empty_bookmakers(self):
+        assert extract_bookmakers({"bookmakers": []}) == []
+        assert extract_bookmakers({}) == []
+
+    def test_bookmaker_missing_key(self):
+        raw = {"bookmakers": [{"title": "No Key Book", "markets": []}]}
+        assert extract_bookmakers(raw) == []
+
+    def test_deduplication(self):
+        raw = {
+            "bookmakers": [
+                {"key": "pinnacle", "title": "Pinnacle", "markets": []},
+                {"key": "pinnacle", "title": "Pinnacle Dupe", "markets": []},
+            ]
+        }
+        bks = extract_bookmakers(raw)
+        assert len(bks) == 1

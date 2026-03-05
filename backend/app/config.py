@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     # App
     log_level: str = "INFO"
     env: str = "development"
+    cors_allowed_origins: list[str] = ["http://localhost:3000"]
 
     # Sports config
     supported_sports: list[str] = [

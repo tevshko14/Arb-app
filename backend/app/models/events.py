@@ -2,6 +2,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum,
@@ -70,7 +71,7 @@ class Bookmaker(Base):
     name = Column(String(128), nullable=False)
     region = Column(String(16), nullable=False, default="ca")
     is_sharp = Column(
-        String(1), nullable=False, default="N", comment="Y if sharp book"
+        Boolean, nullable=False, default=False, comment="True if sharp book"
     )
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

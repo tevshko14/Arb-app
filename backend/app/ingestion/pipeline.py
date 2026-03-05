@@ -5,11 +5,15 @@ import time
 from datetime import datetime, timezone
 
 from sqlalchemy import text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import settings
 from app.ingestion.odds_api_client import OddsAPIClient
-from app.ingestion.normalizer import normalize_event, normalize_odds, extract_bookmakers
+from app.ingestion.normalizer import (
+    NormalizationError,
+    normalize_event,
+    normalize_odds,
+    extract_bookmakers,
+)
 from app.entity_resolution.resolver import EntityResolver
 from app.utils.database import async_session
 from app.utils.redis_cache import odds_cache
@@ -55,15 +59,24 @@ class IngestPipeline:
             async with async_session() as session:
                 for raw in raw_events:
                     # Track earliest upcoming event
-                    commence = datetime.fromisoformat(
-                        raw["commence_time"].replace("Z", "+00:00")
-                    )
-                    if commence > datetime.now(timezone.utc):
-                        if next_commence is None or commence < next_commence:
-                            next_commence = commence
+                    raw_time = raw.get("commence_time")
+                    if raw_time:
+                        try:
+                            commence = datetime.fromisoformat(
+                                raw_time.replace("Z", "+00:00")
+                            )
+                            if commence > datetime.now(timezone.utc):
+                                if next_commence is None or commence < next_commence:
+                                    next_commence = commence
+                        except (ValueError, AttributeError):
+                            logger.warning("Unparseable commence_time: %s", raw_time)
 
                     # Normalize event
-                    event = normalize_event(raw)
+                    try:
+                        event = normalize_event(raw)
+                    except NormalizationError as e:
+                        logger.warning("Skipping malformed event: %s", e)
+                        continue
                     event["home_team"] = self.resolver.resolve(
                         event["home_team"], sport, "team"
                     )
