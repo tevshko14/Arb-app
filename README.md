@@ -79,6 +79,9 @@ python -m pytest tests/ -v
 | `/quota` | GET | Remaining Odds API request quota |
 | `/signals` | GET | Current +EV signals — the Daily Golden Plays |
 | `/calibration` | GET | Model calibration metrics (Brier scores) |
+| `/risk` | GET | Risk management state (drawdown, Kelly, exposure) |
+| `/clv` | GET | Closing Line Value report (signal quality) |
+| `/alerts` | GET | Line movement alerts (steam moves, stale lines) |
 
 ### Query Parameters
 
@@ -96,6 +99,10 @@ python -m pytest tests/ -v
 - `sport` — filter by sport key
 - `min_edge` — minimum edge threshold, 0.0–0.5 (default 0.02 = 2%)
 - `limit` — 1–100 (default 20)
+
+**`/alerts`**
+- `hours` — look back period, 1–168 (default 24)
+- `priority` — filter by priority: `high`, `medium`, `low`
 
 ## Architecture
 
@@ -173,11 +180,36 @@ The signal engine (Phase 2) runs a full analysis pipeline for each event:
    - When model proves calibrated (Brier < 0.15), ensemble auto-shifts weight toward model
    - Walk-forward backtesting validates on rolling windows
 
+## Risk & Intelligence (Phase 3)
+
+The system includes four defensive intelligence modules:
+
+1. **Risk Manager** — dynamic Kelly tuning based on performance:
+   - Four risk levels: Aggressive / Normal / Cautious / Defensive
+   - Kelly multiplier adjusts automatically (0.65× → 0.15× based on drawdown)
+   - Per-bookmaker exposure limits prevent concentration risk
+   - Circuit breaker halts betting if bankroll drops below 25% of initial
+2. **CLV Tracker** — measures signal quality via Closing Line Value:
+   - Tracks whether lines move in our direction after we signal an edge
+   - Positive CLV = capturing real information inefficiencies
+   - Bookmaker softness scoring — ranks which books are most exploitable
+3. **Humanizer** — makes bet patterns look natural to avoid restrictions:
+   - Stake randomization (±5-15%) with rounding to natural amounts
+   - Timing delays (log-normal distribution, ~2 min average)
+   - Per-bookmaker daily/weekly frequency limits
+   - Win streak cooloff to avoid automated detection
+   - Bookmaker rotation suggestions
+4. **InfoFi Scanner** — line movement detection:
+   - Steam moves — sudden sharp line changes (>3% implied probability)
+   - Stale line detection — bookmakers slow to update vs sharp market
+   - Convergence tracking — soft books drifting toward Pinnacle prices
+   - Market consensus calculation from all bookmakers
+
 ## Roadmap
 
 - **Phase 1** ✓: Data ingestion, entity resolution, adaptive polling
 - **Phase 2** ✓: Monte Carlo simulator, ensemble scoring, edge/Kelly/calibration engine
-- **Phase 3**: Risk & Intelligence — Kelly tuning, InfoFi scanner, humanizer logic
+- **Phase 3** ✓: Risk management, CLV tracking, humanizer, InfoFi line scanner
 - **Phase 4**: Next.js dashboard, Telegram/Discord alerts, deployment
 
 ## License

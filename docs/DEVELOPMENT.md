@@ -30,7 +30,11 @@ Arb-app/
 │   │   │   ├── edge.py                 # Edge detection across bookmakers
 │   │   │   ├── kelly.py                # Kelly Criterion bet sizing
 │   │   │   ├── calibration.py          # Brier score tracking + backtesting
-│   │   │   └── signal_pipeline.py      # Full analysis orchestrator
+│   │   │   ├── signal_pipeline.py      # Full analysis orchestrator
+│   │   │   ├── risk_manager.py         # Phase 3 — dynamic Kelly + drawdown protection
+│   │   │   ├── clv_tracker.py          # Phase 3 — Closing Line Value measurement
+│   │   │   ├── humanizer.py            # Phase 3 — bet pattern randomization
+│   │   │   └── line_movement.py        # Phase 3 — InfoFi line scanner
 │   │   └── utils/
 │   │       ├── database.py             # Async SQLAlchemy engine (lazy init)
 │   │       ├── health.py               # Health check functions
@@ -49,7 +53,11 @@ Arb-app/
 │   │   ├── test_kelly.py               # 14 tests — Kelly sizing + portfolio caps
 │   │   ├── test_ensemble.py            # 10 tests — ensemble scoring + disagreement
 │   │   ├── test_calibration.py         # 10 tests — Brier scores + backtesting
-│   │   └── test_sport_models.py        # 17 tests — MLB Poisson + UFC Elo
+│   │   ├── test_sport_models.py        # 17 tests — MLB Poisson + UFC Elo
+│   │   ├── test_risk_manager.py        # 18 tests — risk levels, Kelly tuning, exposure
+│   │   ├── test_clv_tracker.py         # 12 tests — CLV calculation, bookmaker profiling
+│   │   ├── test_humanizer.py           # 14 tests — stake noise, timing, suppression
+│   │   └── test_line_movement.py       # 15 tests — steam moves, stale lines, consensus
 │   ├── pytest.ini
 │   └── requirements.txt
 ├── docker-compose.yml                  # Redis only
@@ -219,6 +227,76 @@ Orchestrates the full flow for one event:
 5. Portfolio cap (scale down if total exposure > 20%)
 6. Record predictions for calibration tracking
 
+## Phase 3 — Risk & Intelligence
+
+### Risk Manager (`engine/risk_manager.py`)
+
+Dynamically adjusts bet sizing based on performance and drawdown:
+
+| Risk Level | Kelly Multiplier | Max Stake | Max Portfolio | Trigger |
+|---|---|---|---|---|
+| Aggressive | 0.65× | 6% | 25% | Win rate > 55%, drawdown < 3% |
+| Normal | 0.50× | 5% | 20% | Default state |
+| Cautious | 0.35× | 3% | 15% | Drawdown 10-20% |
+| Defensive | 0.15× | 2% | 8% | Drawdown > 20% |
+
+Additional protections:
+- **Per-bookmaker exposure**: Max 40% of bankroll at any single book
+- **Circuit breaker**: Halts all betting if bankroll drops below 25% of initial
+- **Win/loss tracking**: Per-bookmaker P&L and win rate history
+
+### CLV Tracker (`engine/clv_tracker.py`)
+
+Measures Closing Line Value — the gold standard metric for sharp bettors:
+
+```
+CLV = Closing_Implied_Prob - Signal_Implied_Prob
+```
+
+Positive CLV means the line moved in our direction after we identified the edge, confirming we captured a real information inefficiency.
+
+- **Bookmaker softness scoring**: Ranks bookmakers by how often they offer exploitable lines
+- **Per-sport CLV tracking**: Identifies which sports our model adds the most alpha
+
+### Humanizer (`engine/humanizer.py`)
+
+Prevents sportsbook restrictions by making bet patterns look natural:
+
+- **Stake noise**: ±5-15% randomization, rounded to natural amounts ($25, $50, $100, etc.)
+- **Timing delays**: Log-normal distribution (30s–5min, peak ~2min)
+- **Frequency limits**: Max 3 bets/day and 10 bets/week per bookmaker
+- **Win streak cooloff**: Pauses at a bookmaker after 5 consecutive wins
+- **Bookmaker rotation**: Ranks bookmakers by how safe they are to bet at right now
+
+### InfoFi Line Scanner (`engine/line_movement.py`)
+
+Monitors odds changes across all bookmakers to identify exploitable moments:
+
+- **Steam moves**: >3% implied probability change in one snapshot (AlertPriority.HIGH)
+- **Stale lines**: Bookmaker is >4% off the sharp (Pinnacle) line
+- **Convergence**: Soft book gradually moving toward sharp price (AlertPriority.MEDIUM)
+- **Market consensus**: Median implied probability across all books (vig-removed)
+- **Movement velocity**: Rate of line change per minute for drift detection
+
+### Updated Signal Pipeline Flow
+
+```
+SignalPipeline.analyze_event()
+  ├─ Extract sharp probs (Pinnacle, remove vig)
+  ├─ Ensemble blend (sharp + model + prior)
+  ├─ Find edges against soft bookmakers
+  ├─ Check for stale lines (InfoFi scanner)          ← NEW
+  ├─ Risk Manager: dynamic Kelly multiplier           ← NEW
+  │   ├─ Check risk level (drawdown-based)
+  │   ├─ Check bookmaker exposure limits
+  │   └─ Block bets if circuit breaker active
+  ├─ Kelly sizing with risk-adjusted parameters
+  ├─ Portfolio cap (risk-level-adjusted)
+  ├─ Humanize bets (noise + timing + suppression)     ← NEW
+  ├─ Record predictions for calibration
+  └─ Record signals for CLV tracking                   ← NEW
+```
+
 ## Adding a New Sport
 
 1. Add the sport key to `config.py` → `supported_sports`
@@ -257,7 +335,11 @@ python -m pytest tests/ -v -k fuzzy  # run specific tests
 | Calibration Tracker | 10 | Brier scores, prediction recording, outcome resolution |
 | MLB Poisson Model | 10 | Expected runs, home field, pitcher ERA, simulation |
 | UFC Elo Model | 7 | Elo probabilities, stat adjustments, probability clamping |
-| **Total** | **148** | |
+| Risk Manager | 18 | Risk levels, dynamic Kelly, drawdown, exposure, circuit breaker |
+| CLV Tracker | 12 | CLV calculation, bookmaker profiles, softness scoring |
+| Humanizer | 14 | Stake randomization, timing, frequency limits, win streak cooloff |
+| Line Movement | 15 | Steam moves, convergence, stale lines, market consensus |
+| **Total** | **207** | |
 
 ### What's NOT Tested (Known Gaps)
 

@@ -472,3 +472,137 @@ async def get_calibration() -> CalibrationResponse:
         edge_over_sharp=None,
         calibration_bins=[],
     )
+
+
+# ──────────────── Phase 3: Risk & Intelligence ────────────────
+
+
+class RiskStateResponse(BaseModel):
+    risk_level: str
+    kelly_multiplier: float
+    max_stake_fraction: float
+    max_portfolio_exposure: float
+    current_bankroll: float
+    peak_bankroll: float
+    drawdown_pct: float
+    active_exposure: float
+    active_exposure_pct: float
+    recent_win_rate: float | None
+    total_bets: int
+    total_pnl: float
+
+
+class CLVReportResponse(BaseModel):
+    total_signals: int
+    signals_with_closing: int
+    mean_clv: float | None
+    median_clv: float | None
+    positive_clv_pct: float | None
+    market_efficiency_score: float | None
+    bookmaker_softness: list[dict]
+
+
+class LineAlertResponse(BaseModel):
+    event_id: str
+    movement_type: str
+    priority: str
+    bookmaker: str
+    outcome: str
+    old_odds: float
+    new_odds: float
+    odds_change_pct: float
+    description: str
+
+
+@app.get("/risk", response_model=RiskStateResponse)
+async def get_risk_state() -> RiskStateResponse:
+    """Get current risk management state.
+
+    Shows dynamic Kelly multiplier, drawdown status, exposure levels,
+    and risk posture (aggressive/normal/cautious/defensive).
+    """
+    # In production, this reads from the persistent RiskManager.
+    from app.engine.risk_manager import RiskManager
+    rm = RiskManager()
+    state = rm.get_state()
+    return RiskStateResponse(
+        risk_level=state.risk_level.value,
+        kelly_multiplier=state.kelly_multiplier,
+        max_stake_fraction=state.max_stake_fraction,
+        max_portfolio_exposure=state.max_portfolio_exposure,
+        current_bankroll=state.current_bankroll,
+        peak_bankroll=state.peak_bankroll,
+        drawdown_pct=state.drawdown_pct,
+        active_exposure=state.active_exposure,
+        active_exposure_pct=state.active_exposure_pct,
+        recent_win_rate=state.recent_win_rate,
+        total_bets=state.total_bets,
+        total_pnl=state.total_pnl,
+    )
+
+
+@app.get("/clv", response_model=CLVReportResponse)
+async def get_clv_report() -> CLVReportResponse:
+    """Get Closing Line Value report.
+
+    Measures signal quality: are the lines moving in our direction
+    after we identify edges? Positive CLV = real edge, not noise.
+    """
+    # In production, reads from persistent CLVTracker.
+    from app.engine.clv_tracker import CLVTracker
+    tracker = CLVTracker()
+    report = tracker.generate_report()
+    return CLVReportResponse(
+        total_signals=report.total_signals,
+        signals_with_closing=report.signals_with_closing,
+        mean_clv=report.mean_clv,
+        median_clv=report.median_clv,
+        positive_clv_pct=report.positive_clv_pct,
+        market_efficiency_score=report.market_efficiency_score,
+        bookmaker_softness=[
+            {
+                "bookmaker": p.bookmaker,
+                "total_signals": p.total_signals,
+                "softness_score": round(p.softness_score, 4),
+                "mean_clv": round(p.mean_clv, 6) if p.mean_clv else None,
+                "mean_edge": round(p.mean_edge_offered, 4),
+            }
+            for p in report.bookmaker_profiles.values()
+        ],
+    )
+
+
+@app.get("/alerts", response_model=list[LineAlertResponse])
+async def get_line_alerts(
+    hours: int = Query(24, ge=1, le=168, description="Look back period in hours"),
+    priority: str | None = Query(None, description="Filter by priority: high, medium, low"),
+) -> list[LineAlertResponse]:
+    """Get recent line movement alerts.
+
+    Steam moves, stale lines, and convergence events detected
+    by the InfoFi scanner.
+    """
+    # In production, reads from persistent LineMovementTracker.
+    from app.engine.line_movement import LineMovementTracker, AlertPriority
+    tracker = LineMovementTracker()
+    alert_priority = None
+    if priority:
+        try:
+            alert_priority = AlertPriority(priority)
+        except ValueError:
+            pass
+    alerts = tracker.get_recent_alerts(hours=hours, priority=alert_priority)
+    return [
+        LineAlertResponse(
+            event_id=a.event_id,
+            movement_type=a.movement_type.value,
+            priority=a.priority.value,
+            bookmaker=a.bookmaker,
+            outcome=a.outcome,
+            old_odds=a.old_odds,
+            new_odds=a.new_odds,
+            odds_change_pct=a.odds_change_pct,
+            description=a.description,
+        )
+        for a in alerts
+    ]
