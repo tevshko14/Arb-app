@@ -13,7 +13,11 @@ Bet Buddy identifies Positive Expected Value (+EV) opportunities by comparing od
    - **Idle** (5 min) — no games within 6 hours
    - **Warm** (60s) — games 2–6 hours away
    - **Hot** (30s) — games < 2 hours out
-5. **Serves signals** via a FastAPI REST API with health monitoring
+5. **Simulates outcomes** — Monte Carlo engine with sport-specific models (Poisson for MLB, Elo for UFC) and variance reduction techniques
+6. **Finds +EV edges** — ensemble scoring blends sharp lines, model output, and Bayesian priors, then compares against soft book odds
+7. **Sizes bets** — Kelly Criterion (Half Kelly default) with portfolio exposure caps
+8. **Tracks accuracy** — Brier score calibration automatically shifts ensemble weights as the model proves itself
+9. **Serves signals** via a FastAPI REST API with health monitoring
 
 ## Supported Sports (Phase 1)
 
@@ -73,6 +77,8 @@ python -m pytest tests/ -v
 | `/odds/{event_id}` | GET | Latest odds across all bookmakers |
 | `/odds/{event_id}/history` | GET | Historical odds snapshots for line movement |
 | `/quota` | GET | Remaining Odds API request quota |
+| `/signals` | GET | Current +EV signals — the Daily Golden Plays |
+| `/calibration` | GET | Model calibration metrics (Brier scores) |
 
 ### Query Parameters
 
@@ -86,47 +92,47 @@ python -m pytest tests/ -v
 - `bookmaker` — filter by bookmaker key (e.g., `pinnacle`)
 - `limit` — 1–1000 (default 100)
 
+**`/signals`**
+- `sport` — filter by sport key
+- `min_edge` — minimum edge threshold, 0.0–0.5 (default 0.02 = 2%)
+- `limit` — 1–100 (default 20)
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   FastAPI App                     │
-│  /health  /events  /odds  /quota                 │
-└──────────┬──────────────────┬────────────────────┘
-           │                  │
-    ┌──────▼──────┐    ┌──────▼──────┐
-    │  Adaptive   │    │   Redis     │
-    │  Scheduler  │    │   Cache     │
-    │ (idle/warm/ │    │ (latest     │
-    │    hot)     │    │  prices)    │
-    └──────┬──────┘    └─────────────┘
-           │
-    ┌──────▼──────┐
-    │  Ingestion  │
-    │  Pipeline   │
-    │  ┌────────┐ │
-    │  │OddsAPI │ │──→ The-Odds-API
-    │  │Client  │ │
-    │  └────────┘ │
-    │  ┌────────┐ │
-    │  │Normal- │ │
-    │  │izer    │ │
-    │  └────────┘ │
-    │  ┌────────┐ │
-    │  │Entity  │ │──→ Fuzzy matching + static maps
-    │  │Resolver│ │
-    │  └────────┘ │
-    └──────┬──────┘
-           │
-    ┌──────▼──────┐
-    │  Supabase   │
-    │  (Postgres) │
-    │  ┌────────┐ │
-    │  │events  │ │
-    │  │odds_*  │ │
-    │  │health  │ │
-    │  └────────┘ │
-    └─────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        FastAPI App                            │
+│  /health  /events  /odds  /quota  /signals  /calibration     │
+└──────┬──────────────────┬───────────────────┬────────────────┘
+       │                  │                   │
+┌──────▼──────┐    ┌──────▼──────┐    ┌───────▼────────┐
+│  Adaptive   │    │   Redis     │    │  Signal        │
+│  Scheduler  │    │   Cache     │    │  Pipeline      │
+│ (idle/warm/ │    │ (latest     │    │  ("The Brain") │
+│    hot)     │    │  prices)    │    └───────┬────────┘
+└──────┬──────┘    └─────────────┘            │
+       │                              ┌───────┼───────────┐
+┌──────▼──────┐                ┌──────▼──┐ ┌──▼────┐ ┌────▼───┐
+│  Ingestion  │                │Ensemble │ │ Edge  │ │ Kelly  │
+│  Pipeline   │                │ Scorer  │ │Finder │ │ Sizer  │
+│  ┌────────┐ │                └────┬────┘ └───────┘ └────────┘
+│  │OddsAPI │ │──→ The-Odds-API    │
+│  │Client  │ │               ┌────┼────────────┐
+│  └────────┘ │          ┌────▼──┐ │       ┌────▼───────┐
+│  ┌────────┐ │          │Sharp  │ │       │ Calibration│
+│  │Normal- │ │          │ Line  │ │       │ Tracker    │
+│  │izer    │ │          └───────┘ │       │ (Brier)    │
+│  └────────┘ │               ┌────▼────┐  └────────────┘
+│  ┌────────┐ │               │Monte    │
+│  │Entity  │ │──→ Fuzzy      │Carlo    │
+│  │Resolver│ │    matching   │Engine   │
+│  └────────┘ │               ├─────────┤
+└──────┬──────┘               │MLB:Pois.│
+       │                      │UFC:Elo  │
+┌──────▼──────┐               └─────────┘
+│  Supabase   │
+│  (Postgres) │
+└─────────────┘
 ```
 
 ## Configuration
@@ -144,11 +150,34 @@ All configuration is via environment variables (see `.env.example`):
 | `CORS_ALLOWED_ORIGINS` | Allowed CORS origins (JSON list) | `["http://localhost:3000"]` |
 | `LOG_LEVEL` | Python log level | `INFO` |
 
+## How The Brain Works
+
+The signal engine (Phase 2) runs a full analysis pipeline for each event:
+
+1. **Sharp Line Extraction** — pulls Pinnacle odds, removes vig to get "true" probabilities
+2. **Monte Carlo Simulation** — runs 10,000 simulations per event:
+   - **MLB**: Poisson run-scoring model (offense/defense ratings, pitcher ERA, home field)
+   - **UFC**: Elo rating system + striking/grappling stat adjustments
+   - **Variance reduction**: antithetic variates + stratified sampling for accurate estimates
+3. **Ensemble Scoring** — blends three probability sources:
+   - Sharp line (55%) — the market's best estimate
+   - Sport model (35%) — our independent Monte Carlo estimate
+   - Bayesian prior (10%) — shrinkage toward 50% to prevent overconfidence
+4. **Edge Detection** — compares ensemble probability against each soft bookmaker's odds:
+   - `Edge = (Model_Prob × Decimal_Odds) - 1`
+   - Only surfaces edges above 2% threshold
+5. **Kelly Sizing** — calculates optimal bet size:
+   - Half Kelly (0.5×) by default for conservative bankroll growth
+   - 5% max single-bet cap, 20% max portfolio exposure
+6. **Calibration Tracking** — Brier score monitors prediction accuracy:
+   - When model proves calibrated (Brier < 0.15), ensemble auto-shifts weight toward model
+   - Walk-forward backtesting validates on rolling windows
+
 ## Roadmap
 
-- **Phase 1** (current): Data ingestion, entity resolution, adaptive polling
-- **Phase 2**: Monte Carlo simulator, ensemble scoring, Edge/Alpha calculation
-- **Phase 3**: Kelly Criterion engine, InfoFi signal scanner, variance tester
+- **Phase 1** ✓: Data ingestion, entity resolution, adaptive polling
+- **Phase 2** ✓: Monte Carlo simulator, ensemble scoring, edge/Kelly/calibration engine
+- **Phase 3**: Risk & Intelligence — Kelly tuning, InfoFi scanner, humanizer logic
 - **Phase 4**: Next.js dashboard, Telegram/Discord alerts, deployment
 
 ## License
