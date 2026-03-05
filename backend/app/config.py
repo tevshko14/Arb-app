@@ -1,7 +1,15 @@
+import json
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    @field_validator("cors_allowed_origins", "supported_sports", "target_bookmakers", mode="before")
+    @classmethod
+    def parse_json_list(cls, v):
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
     # The-Odds-API
     odds_api_key: str = ""
     odds_api_base_url: str = "https://api.the-odds-api.com/v4"
