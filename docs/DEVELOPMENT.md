@@ -34,7 +34,8 @@ Arb-app/
 │   │   │   ├── risk_manager.py         # Phase 3 — dynamic Kelly + drawdown protection
 │   │   │   ├── clv_tracker.py          # Phase 3 — Closing Line Value measurement
 │   │   │   ├── humanizer.py            # Phase 3 — bet pattern randomization
-│   │   │   └── line_movement.py        # Phase 3 — InfoFi line scanner
+│   │   │   ├── line_movement.py        # Phase 3 — InfoFi line scanner
+│   │   │   └── alerts.py              # Phase 4 — Discord/Telegram webhooks
 │   │   └── utils/
 │   │       ├── database.py             # Async SQLAlchemy engine (lazy init)
 │   │       ├── health.py               # Health check functions
@@ -57,9 +58,30 @@ Arb-app/
 │   │   ├── test_risk_manager.py        # 18 tests — risk levels, Kelly tuning, exposure
 │   │   ├── test_clv_tracker.py         # 12 tests — CLV calculation, bookmaker profiling
 │   │   ├── test_humanizer.py           # 14 tests — stake noise, timing, suppression
-│   │   └── test_line_movement.py       # 15 tests — steam moves, stale lines, consensus
+│   │   ├── test_line_movement.py       # 15 tests — steam moves, stale lines, consensus
+│   │   └── test_alerts.py             # 12 tests — webhook config, message formatting
 │   ├── pytest.ini
 │   └── requirements.txt
+├── frontend/                           # Phase 4 — Next.js dashboard
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── layout.tsx             # Root layout with nav
+│   │   │   ├── page.tsx               # Dashboard — signals, risk, calibration
+│   │   │   ├── events/page.tsx        # Events browser
+│   │   │   ├── alerts/page.tsx        # Alerts feed + CLV + bookmaker softness
+│   │   │   └── globals.css            # Tailwind + dark theme CSS
+│   │   ├── components/
+│   │   │   ├── Nav.tsx                # Navigation bar
+│   │   │   ├── Card.tsx               # Content card wrapper
+│   │   │   ├── MetricBox.tsx          # Metric display box
+│   │   │   └── StatusBadge.tsx        # Color-coded status badges
+│   │   └── lib/
+│   │       ├── api.ts                 # Typed API client for backend
+│   │       └── types.ts              # TypeScript interfaces matching Pydantic
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── next.config.ts
+│   └── postcss.config.mjs
 ├── docker-compose.yml                  # Redis only
 ├── .env.example
 ├── .gitignore
@@ -339,7 +361,8 @@ python -m pytest tests/ -v -k fuzzy  # run specific tests
 | CLV Tracker | 12 | CLV calculation, bookmaker profiles, softness scoring |
 | Humanizer | 14 | Stake randomization, timing, frequency limits, win streak cooloff |
 | Line Movement | 15 | Steam moves, convergence, stale lines, market consensus |
-| **Total** | **207** | |
+| Alert System | 12 | Webhook config, message formatting, edge filtering |
+| **Total** | **219** | |
 
 ### What's NOT Tested (Known Gaps)
 
@@ -347,6 +370,41 @@ python -m pytest tests/ -v -k fuzzy  # run specific tests
 - **Async tests** — `pipeline.run_cycle()`, `scheduler.start()` (requires async fixtures + mocks)
 - **API endpoint tests** — Full HTTP request/response via `TestClient` (requires all dependencies running)
 - **Signal pipeline integration** — `SignalPipeline.analyze_event()` with live odds data
+
+## Phase 4 — Interface & Alerts
+
+### Next.js Dashboard (`frontend/`)
+
+Built with Next.js 16, TypeScript, and Tailwind CSS 4. Uses the App Router with server components for data fetching.
+
+**Pages:**
+- `/` (Dashboard) — Golden Plays signals table, risk state metrics (bankroll, drawdown, Kelly, exposure), calibration tracking (Brier scores), betting stats
+- `/events` — Events browser with sport/status badges, commence times
+- `/alerts` — CLV summary metrics, steam move alerts, convergence events, bookmaker softness ranking with progress bars
+
+**Architecture:**
+- `src/lib/types.ts` — TypeScript interfaces matching every Pydantic response model
+- `src/lib/api.ts` — Typed fetch functions for all 11 API endpoints
+- `src/components/` — Reusable UI: `Card`, `MetricBox`, `StatusBadge`, `Nav`
+- Server-side rendering with `revalidate: 30` for fresh data every 30 seconds
+- Dark theme using CSS custom properties
+- Set `NEXT_PUBLIC_API_URL` to point to the backend (default: `http://localhost:8000`)
+
+### Alert System (`engine/alerts.py`)
+
+Sends real-time notifications via Discord webhooks and Telegram Bot API:
+
+**Alert types:**
+- `SIGNAL` — New +EV signal detected (configurable min edge, default 3%)
+- `STEAM_MOVE` — High-priority line movement
+- `RISK_CHANGE` — Risk level transition (e.g., normal → cautious)
+- `DAILY_SUMMARY` — End-of-day recap with P&L, signals, calibration
+
+**Setup:**
+- Discord: Set `DISCORD_WEBHOOK_URL` in `.env` (get from Discord channel settings → Integrations → Webhooks)
+- Telegram: Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`
+
+Both channels are fire-and-forget with error logging. The `AlertManager` uses `httpx.AsyncClient` for non-blocking sends.
 
 ## Security Measures
 

@@ -29,6 +29,7 @@ Bet Buddy identifies Positive Expected Value (+EV) opportunities by comparing od
 ### Prerequisites
 
 - Python 3.11+
+- Node.js 18+ (for the dashboard)
 - Docker (for Redis)
 - A [Supabase](https://supabase.com) project (free tier works)
 - An API key from [The-Odds-API](https://the-odds-api.com)
@@ -50,15 +51,19 @@ cp .env.example .env
 # Copy the contents of backend/migrations/001_initial_schema.sql
 # and run it in your Supabase SQL Editor (Dashboard → SQL Editor → New Query)
 
-# 5. Install dependencies
+# 5. Install and start the backend
 cd backend
 pip install -r requirements.txt
-
-# 6. Start the server
 uvicorn app.main:app --reload
+
+# 6. Install and start the dashboard (in a new terminal)
+cd frontend
+npm install
+npm run dev
 ```
 
 The API will be available at `http://localhost:8000`. Swagger docs at `http://localhost:8000/docs`.
+The dashboard will be available at `http://localhost:3000`.
 
 ### Running Tests
 
@@ -210,7 +215,7 @@ The system includes four defensive intelligence modules:
 - **Phase 1** ✓: Data ingestion, entity resolution, adaptive polling
 - **Phase 2** ✓: Monte Carlo simulator, ensemble scoring, edge/Kelly/calibration engine
 - **Phase 3** ✓: Risk management, CLV tracking, humanizer, InfoFi line scanner
-- **Phase 4**: Next.js dashboard, Telegram/Discord alerts, deployment
+- **Phase 4** ✓: Next.js dashboard, Discord/Telegram alerts
 
 ## License
 
