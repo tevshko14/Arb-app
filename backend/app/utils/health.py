@@ -49,7 +49,7 @@ async def get_ingestion_status() -> dict:
                     SELECT sport, events_found, snapshots_written,
                            errors, latency_ms, polled_at,
                            EXTRACT(EPOCH FROM (now() - polled_at)) AS age_seconds
-                    FROM ingestion_health
+                    FROM bb_ingestion_health
                     ORDER BY polled_at DESC
                     LIMIT 10
                 """)

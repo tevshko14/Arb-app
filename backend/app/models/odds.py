@@ -17,14 +17,14 @@ from app.models.events import Base
 class OddsSnapshot(Base):
     """Timestamped odds record — every poll writes here for full history."""
 
-    __tablename__ = "odds_snapshots"
+    __tablename__ = "bb_odds_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     event_id = Column(
-        String(64), ForeignKey("events.id"), nullable=False, index=True
+        String(64), ForeignKey("bb_events.id"), nullable=False, index=True
     )
     bookmaker_key = Column(
-        String(64), ForeignKey("bookmakers.key"), nullable=False
+        String(64), ForeignKey("bb_bookmakers.key"), nullable=False
     )
     market = Column(
         String(32), nullable=False, default="h2h", comment="h2h, spreads, totals"
@@ -45,14 +45,14 @@ class OddsSnapshot(Base):
 class OddsLatest(Base):
     """Current best odds per event/outcome — fast-read materialized view."""
 
-    __tablename__ = "odds_latest"
+    __tablename__ = "bb_odds_latest"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     event_id = Column(
-        String(64), ForeignKey("events.id"), nullable=False
+        String(64), ForeignKey("bb_events.id"), nullable=False
     )
     bookmaker_key = Column(
-        String(64), ForeignKey("bookmakers.key"), nullable=False
+        String(64), ForeignKey("bb_bookmakers.key"), nullable=False
     )
     market = Column(String(32), nullable=False, default="h2h")
     outcome_name = Column(String(128), nullable=False)
@@ -80,7 +80,7 @@ class OddsLatest(Base):
 class IngestionHealth(Base):
     """Heartbeat log for monitoring the ingestion pipeline."""
 
-    __tablename__ = "ingestion_health"
+    __tablename__ = "bb_ingestion_health"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     sport = Column(String(64), nullable=False)
@@ -98,7 +98,7 @@ class IngestionHealth(Base):
 class EntityMapping(Base):
     """Entity resolution lookup — maps source names to canonical names."""
 
-    __tablename__ = "entity_mappings"
+    __tablename__ = "bb_entity_mappings"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     source = Column(

@@ -33,7 +33,7 @@ class EventStatus(str, enum.Enum):
 class Event(Base):
     """Universal Event — the canonical representation of a sporting event."""
 
-    __tablename__ = "events"
+    __tablename__ = "bb_events"
 
     id = Column(String(64), primary_key=True, comment="Universal Event ID")
     sport = Column(Enum(SportType), nullable=False, index=True)
@@ -65,7 +65,7 @@ class Event(Base):
 class Bookmaker(Base):
     """Registry of tracked sportsbooks."""
 
-    __tablename__ = "bookmakers"
+    __tablename__ = "bb_bookmakers"
 
     key = Column(String(64), primary_key=True, comment="The-Odds-API key")
     name = Column(String(128), nullable=False)

@@ -186,7 +186,7 @@ async def list_events(
     async with async_session() as session:
         query = """
             SELECT id, sport, league, home_team, away_team, commence_time, status
-            FROM events WHERE status = :status
+            FROM bb_events WHERE status = :status
         """
         params: dict = {"status": status.value, "limit": limit, "offset": offset}
 
@@ -227,8 +227,8 @@ async def get_odds(event_id: str) -> list[OddsResponse]:
                 SELECT ol.bookmaker_key, ol.market, ol.outcome_name,
                        ol.price, ol.point, ol.updated_at,
                        b.name as bookmaker_name, b.is_sharp
-                FROM odds_latest ol
-                JOIN bookmakers b ON b.key = ol.bookmaker_key
+                FROM bb_odds_latest ol
+                JOIN bb_bookmakers b ON b.key = ol.bookmaker_key
                 WHERE ol.event_id = :event_id
                 ORDER BY ol.market, ol.outcome_name, ol.price DESC
                 LIMIT 500
@@ -266,7 +266,7 @@ async def get_odds_history(
     async with async_session() as session:
         query = """
             SELECT bookmaker_key, market, outcome_name, price, point, captured_at
-            FROM odds_snapshots
+            FROM bb_odds_snapshots
             WHERE event_id = :event_id
         """
         params: dict = {"event_id": event_id, "limit": limit}
@@ -359,8 +359,8 @@ async def get_signals(
     async with async_session() as session:
         query = """
             SELECT DISTINCT e.id, e.sport, e.home_team, e.away_team
-            FROM events e
-            JOIN odds_latest ol ON ol.event_id = e.id
+            FROM bb_events e
+            JOIN bb_odds_latest ol ON ol.event_id = e.id
             WHERE e.status = 'upcoming'
         """
         params: dict = {"limit": limit * 5}
@@ -380,7 +380,7 @@ async def get_signals(
             result = await session.execute(
                 text("""
                     SELECT ol.bookmaker_key, ol.outcome_name, ol.price
-                    FROM odds_latest ol
+                    FROM bb_odds_latest ol
                     WHERE ol.event_id = :event_id AND ol.market = 'h2h'
                 """),
                 {"event_id": ev.id},

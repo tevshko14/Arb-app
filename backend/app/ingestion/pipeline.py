@@ -87,7 +87,7 @@ class IngestPipeline:
                     # Upsert event
                     await session.execute(
                         text("""
-                            INSERT INTO events (id, sport, league, home_team, away_team,
+                            INSERT INTO bb_events (id, sport, league, home_team, away_team,
                                                 commence_time, status, external_ids)
                             VALUES (:id, :sport, :league, :home_team, :away_team,
                                     :commence_time, :status, :external_ids)
@@ -102,7 +102,7 @@ class IngestPipeline:
                     for bk in extract_bookmakers(raw):
                         await session.execute(
                             text("""
-                                INSERT INTO bookmakers (key, name, region, is_sharp)
+                                INSERT INTO bb_bookmakers (key, name, region, is_sharp)
                                 VALUES (:key, :name, :region, :is_sharp)
                                 ON CONFLICT (key) DO NOTHING
                             """),
@@ -119,7 +119,7 @@ class IngestPipeline:
                         # Insert snapshot (historical)
                         await session.execute(
                             text("""
-                                INSERT INTO odds_snapshots
+                                INSERT INTO bb_odds_snapshots
                                     (event_id, bookmaker_key, market,
                                      outcome_name, price, point)
                                 VALUES
@@ -132,7 +132,7 @@ class IngestPipeline:
                         # Upsert latest odds
                         await session.execute(
                             text("""
-                                INSERT INTO odds_latest
+                                INSERT INTO bb_odds_latest
                                     (event_id, bookmaker_key, market,
                                      outcome_name, price, point)
                                 VALUES
@@ -193,7 +193,7 @@ class IngestPipeline:
             async with async_session() as session:
                 await session.execute(
                     text("""
-                        INSERT INTO ingestion_health
+                        INSERT INTO bb_ingestion_health
                             (sport, events_found, snapshots_written, errors, latency_ms)
                         VALUES
                             (:sport, :events_found, :snapshots_written, :errors, :latency_ms)
